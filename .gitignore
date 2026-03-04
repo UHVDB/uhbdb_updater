@@ -3,8 +3,4 @@ work/
 results/
 .vscode/
 tmp/
-*.csv
-*.tsv
 .nf-test*
-*.gz
-*.zst
