@@ -28,7 +28,7 @@ def main(args=None):
     args = parse_args(args)
 
     ### Read input TSV file
-    input_df = pl.read_csv(args.input, sep="\t")
+    input_df = pl.read_csv(args.input, separator="\t")
 
     ### Filter input file
     # completeness >= 90
@@ -60,21 +60,23 @@ def main(args=None):
         # write out aria2c file
         (
             group
+                .filter(pl.col("url").is_not_null())
                 .with_columns([
                     # get file suffix from url (e.g. .fna.gz)
                     pl.col('url').str.extract(r'(\.fna\.gz|\.fa\.gz|\.fasta\.gz|\.fna|\.fa|.fasta)$').alias('suffix'),
                 ])
                 .with_columns([
                     # create new column with
-                    (pl.col('url') + " out=" + pl.col('source_db') + "_" + pl.col('genome') + pl.col('suffix')).alias('aria2c_entry')
+                    (pl.col('url') + "\n out=" + pl.col('source_db') + "_" + pl.col('genome') + pl.col('suffix')).alias('aria2c_entry')
                 ])
                 [['aria2c_entry']]
-                .write_csv(urls_path, separator="\t", include_header=False)
+                .write_csv(urls_path, include_header=False)
         )
 
         # write out local symlink file
         (
             group
+                .filter(pl.col("path").is_not_null())
                 .with_columns([
                     # get file suffix from url (e.g. .fna.gz)
                     pl.col('path').str.extract(r'(\.fna\.gz|\.fa\.gz|\.fasta\.gz|\.fna|\.fa|.fasta)$').alias('suffix'),
@@ -84,14 +86,29 @@ def main(args=None):
                     (pl.col('path') + " ./local_fastas/" + pl.col('source_db') + "_" + pl.col('genome') + pl.col('suffix')).alias('symlink_entry')
                 ])
                 [['symlink_entry']]
-                .write_csv(local_paths, separator="\s", include_header=False)
+                .write_csv(local_paths, include_header=False)
         )
         
         # write out objects file (just genome names sorted by n50)
-        group[['genome']].write_csv(object_file, separator="\t")
-
+        (
+            group
+                .with_columns([
+                    # create new column with
+                    (pl.col('source_db') + "_" + pl.col('genome')).alias('object')
+                ])
+                [['object']]
+                .write_csv(object_file, separator="\t")
+        )
+    
         # write out filtered metadata file
-        group.write_csv(meta_file, separator="\t")
+        (
+            group
+                .with_columns([
+                    # create new column with
+                    (pl.col('source_db') + "_" + pl.col('genome')).alias('genome_id')
+                ])
+                .write_csv(meta_file, separator="\t")
+        )
 
 if __name__ == "__main__":
     main()

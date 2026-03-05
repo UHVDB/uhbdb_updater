@@ -1,6 +1,6 @@
 .nextflow*
 work/
-results/
+results*/
 .vscode/
-tmp/
+tmp*/
 .nf-test*
