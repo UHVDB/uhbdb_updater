@@ -60,7 +60,7 @@ def main(args=None):
         # write out aria2c file
         (
             group
-                .filter(pl.col("url").is_not_null())
+                .filter((pl.col("url").is_not_null()) & (pl.col('path').is_null()))
                 .with_columns([
                     # get file suffix from url (e.g. .fna.gz)
                     pl.col('url').str.extract(r'(\.fna\.gz|\.fa\.gz|\.fasta\.gz|\.fna|\.fa|.fasta)$').alias('suffix'),
@@ -107,6 +107,7 @@ def main(args=None):
                     # create new column with
                     (pl.col('source_db') + "_" + pl.col('genome')).alias('genome_id')
                 ])
+                .drop(['path'])
                 .write_csv(meta_file, separator="\t")
         )
 

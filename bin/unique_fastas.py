@@ -34,7 +34,7 @@ def main(args=None):
     ### Read input TSV file
     input_df = pl.read_csv(args.input, separator="\t", has_header=False, new_columns=["genome_id", "path"])
 
-    ### Identify reference fasta
+    ### Identify clusters
     ref_id = set(
         pl.read_csv(args.clusters, separator="\t", has_header=True)
             .head(1)

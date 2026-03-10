@@ -30,7 +30,7 @@ workflow {
         .map { files -> files }
         .flatten()
         .map { file ->
-            def genus = file.getBaseName().toString().split('_')[0]
+            def genus = file.getBaseName().toString().replaceAll(/_(local_fastas|metadata|objects|urls)/, '')
             [ [ genus: genus ], file ]
         }
         .groupTuple(by: 0, sort: true)
@@ -38,14 +38,14 @@ workflow {
 
     UHBDBUPDATER_LARGE(
         ch_large_input,
-        ch_uhbdb_dir
+        ch_uhbdb_dir.first()
     )
 
     ch_small_input = SPLITBYGENUS.out.small
         .map { files -> files }
         .flatten()
         .map { file ->
-            def genus = file.getBaseName().toString().split('_')[0]
+            def genus = file.getBaseName().toString().replaceAll(/_(local_fastas|metadata|objects|urls)/, '')
             [ [ genus: genus ], file ]
         }
         .groupTuple(by: 0, sort: true)
@@ -53,6 +53,6 @@ workflow {
 
     UHBDBUPDATER_SMALL(
         ch_small_input,
-        ch_uhbdb_dir
+        ch_uhbdb_dir.first()
     )
 }

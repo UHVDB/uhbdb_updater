@@ -46,11 +46,19 @@ def parse_args(args=None):
 def main(args=None):
     args = parse_args(args)
 
+    ### Read fast files TSV file (downloaded fasta files)
+    fast_files_set = set(
+        pl.read_csv(args.new_fasta_tsv, separator="\t", has_header=False)['column_1']
+    )
+
     ### Read old metadata
     old_metadata_df = pl.read_csv(args.old_metadata, separator="\t")
 
     ### Read new metadata
-    new_metadata_df = pl.read_csv(args.new_metadata, separator="\t")
+    new_metadata_df = (
+        pl.read_csv(args.new_metadata, separator="\t")
+        .filter(pl.col('genome_id').is_in(fast_files_set))
+    )
 
     ### Read combined clusters file
     clusters_df = (

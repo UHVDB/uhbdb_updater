@@ -26,10 +26,10 @@ process UHBDBUPDATER {
     aria2c \\
         --input=${urls_txt} \\
         --dir=url_fastas \\
-        --max-concurrent-downloads=8 \\
+        --max-concurrent-downloads=${task.cpus} \\
         --max-tries=5 \\
         --retry-wait=60 \\
-        --continue
+        --continue || true # continue even if some downloads fail
 
 
     ### Rename local fastas to match IDs in TSV
@@ -37,13 +37,11 @@ process UHBDBUPDATER {
     mkdir -p local_fastas
 
     # create symbolic links for local fastas with new names based on TSV
-    while IFS=' ' read -r target link; do
-    if [[ -n "\$target" && -n "\$link" ]]; then
-        # Create the symbolic link
-        ln -s "\$target" "\$link"
+    # if local_txt is not empty
+    if [[ -s ${local_txt} ]]; then
+        awk -F ' ' 'NF>=2 {print \$1 "\\0" \$2 "\\0"}' "${local_txt}" \\
+            | xargs -0 -n 2 -P ${task.cpus} bash -c 'ln -s -- "\$1" "\$2"' _
     fi
-    done < "${local_txt}"
-
 
     ### Create sketchlib sketch (sketchlib)
     # create input file of fastas
@@ -53,6 +51,7 @@ process UHBDBUPDATER {
     awk -F/ '{print \$NF"\\t"\$0}' fasta_files.txt > fasta_files.tsv
     sed -i 's/\\.f.*\\t/\\t/g' fasta_files.tsv
 
+
     # create sketchlib sketch
     sketchlib sketch \\
         -f fasta_files.tsv \\
@@ -61,6 +60,41 @@ process UHBDBUPDATER {
         --sketch-size 1000 \\
         --threads ${task.cpus} \\
         --verbose
+    
+    ### IF ONLY ONE FILE, SKIP CLUSTERING AND CREATE AGC ARCHIVE OF UNIQUE FASTA(S) ###
+    num_fastas=\$(wc -l < fasta_files.tsv)
+    if [[ \$num_fastas -eq 1 ]]; then
+        # Create output directory for final outputs
+        mkdir -p final_files
+
+        ### FINAL: Move sketchlib sketch to final outputs directory (sketchlib)
+        mv ${meta.genus}_k31_s1000.skm final_files/${meta.genus}_k31_s1000.skm
+        mv ${meta.genus}_k31_s1000.skd final_files/${meta.genus}_k31_s1000.skd
+
+        ### FINAL: Create AGC archive of unique fastas (agc)
+        ref_fasta=\$(head -n 1 fasta_files.tsv | cut -f 2)
+
+        # create AGC archive with unique fastas
+        agc create \\
+            \$ref_fasta \\
+            -a true \\
+            -b 500 \\
+            -s 1500 \\
+            -o final_files/${meta.genus}.agc \\
+            -t ${task.cpus} \\
+            -f 0.01 \\
+            -v 1
+
+        ### FINAL: Copy metadata file to final outputs directory
+        cp ${meta_tsv} final_files/${meta.genus}.metadata.tsv
+        gzip final_files/${meta.genus}.metadata.tsv
+
+        ### Cleanup
+        rm -rf url_fastas/ local_fastas/ fasta_files.txt fasta_files.tsv
+
+        mv final_files/* ./
+        exit 0
+    fi
 
     ### IF UHBDB FILES DO NOT EXIST, CREATE NEW ARCHIVES ###
     if [[ ! -f ${uhbdb_dir}/${meta.genus}/${meta.genus}_k31_s1000.skm ]]; then
@@ -123,6 +157,7 @@ process UHBDBUPDATER {
         ### FINAL: Create metadata file for unique fastas (polars)
         metadata.py \\
             --input ${meta_tsv} \\
+            --fast_files_tsv fasta_files.tsv \\
             --clusters ${meta.genus}_self_unique_cdhit.tsv \\
             --output final_files/${meta.genus}.metadata.tsv
 
@@ -140,14 +175,14 @@ process UHBDBUPDATER {
         # Create output directory for final outputs
         mkdir -p final_files
 
-        ### NEW2OLD: Compare new unique to existing unique (sketchlib)
+        ### COMBINED: Combine new and old sketchlib sketches (sketchlib)
         sketchlib merge \\
             ${meta.genus}_k31_s1000.skd \\
             ${uhbdb_dir}/${meta.genus}/${meta.genus}_k31_s1000.skd \\
             -o final_files/${meta.genus}_k31_s1000 \\
             --verbose
 
-        ### NEW2OLD: Create objects file with new + old unique sequences (polars)
+        ### COMBINED: Create objects file with new sequences + old cluster reps (polars)
         combined_objects.py \\
             --new_metadata ${meta_tsv} \\
             --old_metadata ${uhbdb_dir}/${meta.genus}/${meta.genus}.metadata.tsv.gz \\
@@ -155,6 +190,7 @@ process UHBDBUPDATER {
 
         tail -n +2 ${meta.genus}_combined_objects.txt > ${meta.genus}_combined_objects_ids.txt
 
+        ### COMBINED: Calculate all-v-all distance for new sequences + old reps
         sketchlib dist \\
             final_files/${meta.genus}_k31_s1000 \\
             -o ${meta.genus}_combined_dist.tsv \\
@@ -165,7 +201,7 @@ process UHBDBUPDATER {
             --subset ${meta.genus}_combined_objects_ids.txt \\
             --verbose
 
-        ### NEW2OLD: Extract unique sequences (clusty)
+        ### COMBINED: Extract unique sequences (clusty)
         # add header for clusty
         sed -i '1i query\\tref\\tani' ${meta.genus}_combined_dist.tsv
 
@@ -179,7 +215,7 @@ process UHBDBUPDATER {
             --out-representatives
 
         
-        ### NEW2OLD: Remove redundant sketches from new + old sketches (sketchlib)
+        ### COMBINED: Identify new unique sequences and create update metadata (sketchlib)
         # identify duplicate sketches (polars)
         update.py \\
             --old_metadata ${uhbdb_dir}/${meta.genus}/${meta.genus}.metadata.tsv.gz \\
@@ -192,11 +228,27 @@ process UHBDBUPDATER {
         ### Compress
         gzip ${meta.genus}.metadata.tsv
 
-        ### FINAL: Append new unique sequences to existing AGC archive (agc)
-        agc append \\
+        ### COMBINED: Extract old cluster reps to folder (agc append has a bug)
+        mkdir -p agc_old_fastas
+    
+        agc getcol \\
             ${uhbdb_dir}/${meta.genus}/${meta.genus}.agc \\
-            -i ${meta.genus}_new_unique_fastas.txt \\
+            -o agc_old_fastas \\
+            -g 3 \\
+            --fast
+
+        ls ./agc_old_fastas/*.gz > old_rep_fastas.txt
+        cat ${meta.genus}_new_unique_fastas.txt old_rep_fastas.txt > combined_input_fastas.txt
+
+        ref_fasta=\$(head -n 1 ${meta.genus}_combined_objects.txt | tail -n +2)
+
+        ### FINAL: Append new unique sequences to existing AGC archive (agc)
+        agc create \\
+            ./*_fastas/\$ref_fasta* \\
+            -i combined_input_fastas.txt \\
             -a true \\
+            -b 500 \\
+            -s 1500 \\
             -o final_files/${meta.genus}.agc \\
             -t ${task.cpus} \\
             -f 0.01 \\
@@ -206,7 +258,7 @@ process UHBDBUPDATER {
         rm -rf url_fastas/ local_fastas/ fasta_files.txt fasta_files.tsv \\
             ${meta.genus}_k31_s1000* ${meta.genus}_combined* ${meta.genus}_new2old_dist.tsv \\
             ${meta.genus}_combined_cdhit.tsv ${meta.genus}_combined_objects.txt \\
-            ${meta.genus}_new_unique_fastas.txt
+            ${meta.genus}_new_unique_fastas.txt agc_old_reps
 
         mv final_files/* ./
     fi
